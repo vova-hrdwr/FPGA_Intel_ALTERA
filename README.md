@@ -1,0 +1,1 @@
+In this project we have two counters: a fast counter and a slow counter, along with a comparator. Each time the outputs of the slow and fast counters are equal, the slow counter increases and the fast counter loading zero.
