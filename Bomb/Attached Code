@@ -1,0 +1,498 @@
+---------------------------------------------------------------------- hexss ----------------------------------------------------------------------
+module hexss 
+	(
+	input logic [3:0] hexin, // Data input: hex numbers 0 to f
+	input logic darkN, 
+	input logic LampTest, 	// Aditional inputs
+	output logic [6:0] ss 	// Output for 7Seg display
+	);
+	
+//------------------------------------------------------------------------------------
+
+
+// Declaration of two-dimensional array that holds the 7seg codes
+   logic [0:15] [6:0] Seven_Seg = {7'b1000000, 7'b1111001, 7'b0100100,
+	7'b0110000, 7'b0011001, 7'b0010010, 7'b0000010, 7'b1111000, 7'b0000000,
+	7'b0010000, 7'b0001000, 7'b0000011, 7'b1000110, 7'b0100001, 7'b0000110,
+	7'b0001110};
+		
+  always_comb begin
+    if (darkN == 1 && LampTest == 0)
+        ss = Seven_Seg[hexin];
+    else if (darkN == 1 && LampTest == 1)
+        ss = 7'b0000000;
+    else if (darkN == 0)
+        ss = 7'b1111111;
+    else
+        ss = 7'bxxxxxxx; 
+  end
+	    
+//-------------------------------------------------------------------------------------
+
+endmodule
+
+---------------------------------------------------------------------- down counter ----------------------------------------------------------------------
+// Implements a 4 bits down counter 9  down to 0 with several enable inputs and loadN data.
+// It outputs count and asynchronous terminal count, tc, signal 
+
+module down_counter
+	(
+	input logic clk, 
+	input logic resetN, 
+	input logic loadN, 
+	input logic enable1,
+	input logic enable2, 
+	input logic enable3, 
+	input logic [3:0] datain,
+	
+	output logic [3:0] count,
+	output logic tc
+   );
+
+// Down counter
+always_ff @(posedge clk or negedge resetN)
+   begin
+	      
+      if ( !resetN )	begin// Asynchronic reset
+			
+			count <= 4'h0;
+			
+		end
+				
+      else 	begin		// Synchronic logic	
+//--------------------------------------------------------------------------------------------------------------------
+
+     	if (resetN == 1 && loadN == 0) begin		
+	      count <= datain;
+	   end		
+	   else if (resetN == 1 && loadN == 1 && enable1 == 1 && enable2 == 1 && enable3 == 1) begin
+		   if (count == 0)
+			   count <= 'h9;
+			else
+			   count <= count - 1'b1;
+		end
+			
+		end //Synch
+	end //always
+
+	
+	// Asynchronic tc
+	
+	assign tc =  (count == 4'b0000);
+
+//--------------------------------------------------------------------------------------------------------------------
+
+	
+endmodule
+
+---------------------------------------------------------------------- bcddn ----------------------------------------------------------------------
+// Implements a BCD down counter 99 down to 0 with several enable inputs and loadN data
+// having countL, countH and tc outputs
+// by instantiating two one bit down-counters
+
+
+module bcddn
+	(
+	input  logic clk, 
+	input  logic resetN, 
+	input  logic loadN, 
+	input  logic enable1, 
+	input  logic enable2, 
+	
+	output logic [3:0] countL, 
+	output logic [3:0] countH,
+	output logic tc
+   );
+
+// Parameters defined as external, here with a default value - to be updated 
+// in the upper hierarchy file with the actial bomb down counting values
+// -----------------------------------------------------------
+	parameter  logic [3:0] datainL = 4'b0111;
+	parameter  logic [3:0] datainH = 4'b0001;
+// -----------------------------------------------------------
+	
+	logic  tclow, tchigh;// internal variables terminal count 
+	
+// Low counter instantiation
+	down_counter lowc(.clk(clk), 
+							.resetN(resetN),
+							.loadN(loadN),	
+							.enable1(enable1), 
+							.enable2(enable2),
+							.enable3(1'b1), 	
+							.datain(datainL), 
+							.count(countL), 
+							.tc(tclow) );
+	
+// High counter instantiation
+	 down_counter highc(.clk(clk), 
+							.resetN(resetN),
+							.loadN(loadN),    
+							.enable1(enable1), 
+							.enable2(enable2),
+							.enable3(tclow),
+							.datain(datainH), 
+							.count(countH), 
+							.tc(tchigh)
+						);
+//--------------------------------------------------------------------------------------------------------------------	
+
+   assign tc = (countL == 0 && countH == 0);
+
+//--------------------------------------------------------------------------------------------------------------------
+			
+endmodule
+
+---------------------------------------------------------------------- ramzor ----------------------------------------------------------------------
+
+// Implements a simple traffic lights controller
+// by using state machine
+// This module has a single allways_ff:
+//    1. Synchronous code:  executed once every clock to update the current state 
+
+
+module ramzor
+	(
+	input logic clk, // 50 MHz clock 
+	input logic resetN, 
+	input logic switchN, // pedestrian switch to change the light 
+		
+	output logic redLight,	  //  output to the red lamp 
+	output logic yellowLight, //  output to the yellow lamp 
+	output logic greenLight,	  //  output to the green lamp	' 
+   output logic [6:0] HEX0
+
+   );	
+		
+		
+		
+//---------------------------------------------------------
+ localparam SIMULATION_MODE_ON = 0 ;  //  Run Mode : unmask the line for real run 
+    //localparam SIMULATION_MODE_ON = 1 ; //  simulation mode : unmask the line for simulation run
+//---------------------------------------------------------
+
+
+
+// state machine and parameters declaration 
+
+	enum logic [1:0] {s_red, s_red_yellow, s_green, s_yellow} SMramzor; // state machine
+	logic [3:0] counter; // count down second timer 
+	
+   logic t_sec; // A short pulse, once every second. 
+	assign  timerEnded = (counter == 4'b0) ; 
+
+//------------------------------------------------------------------------------------------------------------
+
+
+	localparam logic [3:0] RED_OR_GREEN_TIME = 'd5; 
+	localparam logic [3:0] YELLOW_TIME = 'd1; 
+
+
+	localparam logic LED_ON = 1'b1; 
+	localparam logic LED_OFF = 1'b0;
+
+	
+//--------------------------------------------------------------------------------------------
+// Instance of 1Hz sub module as a time counter for the state machine 
+
+one_sec_counter #(.SIMULATION_MODE(SIMULATION_MODE_ON)) one_sec_counter (.clk(clk),
+								 .resetN(resetN),
+								 .turbo(0),
+								 .one_sec(t_sec) );
+	
+
+//--------------------------------------------------------------------------------------------------------------------
+		
+hexss  hexss (.hexin(counter), .darkN(greenLight), .LampTest(1'b0), .ss(HEX0));	
+
+//--------------------------------------------------------------------------------------------------------------------
+			
+
+//   syncronous code,  executed once every clock to update the current state and outputs 
+	
+always_ff @(posedge clk or negedge resetN) // State machine logic ////
+   begin
+	   
+   if ( !resetN ) begin // Asynchronic reset, initialize the state machine 
+		SMramzor <= s_red;
+		counter  <= RED_OR_GREEN_TIME;
+		redLight  <= 1'b1 ; 
+		yellowLight <=1'b0 ;
+		greenLight <= 1'b0 ;
+	end //asynch
+		
+	else if ( !switchN && SMramzor == s_red) begin
+		SMramzor <= s_red_yellow;
+		counter  <= YELLOW_TIME;
+		redLight  <= 1'b1 ; 
+		
+		
+	end // switch
+	else begin 				   // Synchronic logic of the state machine; once every clock 
+		
+//--------------------------------------------------------------------------------------------------------------------
+		if ( t_sec ) begin  // perform once every timer pulse ( every 0.1 sec ) 
+
+			if ( !timerEnded )  // timer didn't finish
+				counter <= counter - 4'b1; // decremnt the counter
+
+		end
+//------------------------------------------------------------------------------------------
+	// state machine 
+	
+		// default outputs 
+		redLight  <= 1'b0 ; 
+		yellowLight <=1'b0 ;
+		greenLight <= 1'b0 ;
+		
+		case ( SMramzor )
+				
+						//Note: the implementation of the red Yellow state is already given you as an example
+						
+		//          ============		
+						s_red_yellow: begin
+		//          ============		
+							redLight  <= 1'b1 ; 
+							yellowLight <=1'b1 ;
+			
+							if ( timerEnded )  // timer finished 
+								begin 
+ 									SMramzor <= s_green;  //next state 
+									counter <= RED_OR_GREEN_TIME; // reload counter with the next value. 
+								end // if 
+
+						end // s_red_yellow
+
+//--------------------------------------------------------------------------------------------------------------------
+
+		//          ============		
+						s_red: begin
+		//          ============		
+							redLight  <= 1'b1 ; 
+							if ( timerEnded )  // timer finished 
+								begin 
+ 									SMramzor <= s_red_yellow;  //next state 
+									counter <= YELLOW_TIME; // reload counter with the next value. 
+								end // if 
+
+						end // s_red
+		//          ============		
+						s_green: begin
+		//          ============		
+							greenLight <= 1'b1;
+							if ( timerEnded )  // timer finished 
+								begin 
+ 									SMramzor <= s_yellow;  //next state 
+									counter <= YELLOW_TIME; // reload counter with the next value. 
+								end // if 
+
+						end // s_green
+						
+		//          ============		
+						s_yellow: begin
+		//          ============		 
+							yellowLight <=1'b1 ;
+							if ( timerEnded )  // timer finished 
+								begin 
+ 									SMramzor <= s_red;//next state 
+									counter <= RED_OR_GREEN_TIME; // reload counter with the next value. 
+								end // if 
+
+						end // s_yellow						
+//--------------------------------------------------------------------------------------------------------------------
+			
+		
+		//  		  =========		
+					  default : begin   
+		//          =======			
+								SMramzor <= s_red;  //next state 
+						end // default
+		  		
+	endcase
+	end // if reset 
+		
+			
+
+end // always_ff state machine ///////////////////////////////
+
+			 
+						 
+endmodule
+
+---------------------------------------------------------------------- One Sec Counter ----------------------------------------------------------------------
+
+module one_sec_counter      	
+	(
+   // Input, Output Ports
+	input  logic clk, 
+	input  logic resetN, 
+	input  logic turbo,
+	output logic one_sec
+   );
+	
+	int oneSecCount ;
+	int sec ;		 // gets either one seccond or Turbo top value
+
+parameter logic SIMULATION_MODE  = 1 ; 
+	
+//       ----------------------------------------------	counter limit setting
+	localparam oneSecVal_REAL = 32'd50_000_000; // for DE10 board un-comment this line 
+	localparam oneSecVal_SIM = 32'd20; // for quartus simulation un-comment this line 
+	localparam oneSecVal= SIMULATION_MODE ? oneSecVal_SIM : oneSecVal_REAL ; //select what to use 
+//       ----------------------------------------------	
+	
+	assign  sec = turbo ? oneSecVal/10 : oneSecVal;  // it is legal to devide by 10, as it is done by the complier not by logic (actual transistors) 
+
+
+	
+   always_ff @( posedge clk or negedge resetN )
+   begin
+	
+		// asynchronous reset
+		if ( !resetN ) begin
+			one_sec <= 1'b0;
+			oneSecCount <= 32'd0;
+		end // if reset
+		
+		// executed once every clock 	
+		else begin
+			if (oneSecCount >= sec) begin
+				one_sec <= 1'b1;
+				oneSecCount <= 0;
+			end
+			else begin
+				oneSecCount <= oneSecCount + 1;
+				one_sec		<= 1'b0;
+			end
+		end // else clk
+		
+	end // always
+	
+endmodule
+
+---------------------------------------------------------------------- Bomb ----------------------------------------------------------------------
+
+// Implements the state machine of the bomb mini-project
+
+module bomb
+	(
+	input logic clk, 
+	input logic resetN, 
+	input logic startN, 
+	input logic waitN, 
+	input logic OneSecPulse, 
+	input logic timerEnd,
+	
+	output logic countLoadN, 
+	output logic countEnable, 
+	output logic lampEnable 
+   );
+
+//-------------------------------------------------------------------------------------------
+
+// state machine decleration 
+  enum logic [2:0] {s_idle, s_arm, s_run, s_pause, s_lampOff, s_lampOn} SMbomb;
+ 	
+//--------------------------------------------------------------------------------------------
+//  syncronous code:  executed once every clock to update the current state 
+always @(posedge clk or negedge resetN)
+   begin
+	   
+   if ( !resetN ) begin // Asynchronic reset
+		SMbomb <= s_idle;
+		countEnable <= 1'b0;
+		countLoadN  <= 1'b1;
+		lampEnable  <= 1'b0;
+		
+		end 
+
+   
+	else 		// Synchronic logic FSM
+		begin
+		// default outputs 
+		countEnable <= 1'b0;
+		countLoadN  <= 1'b1;
+		lampEnable  <= 1'b1;
+		
+		
+		case (SMbomb) // logically defining what is the next state, and the ouptput
+		
+			//Note: the implementation of the idle state is already given you as an example
+//      ======		
+			s_idle: begin
+//      ======		
+				if (startN == 1'b0) 
+					SMbomb <= s_arm; 
+			end // idle
+//--------------------------------------------------------------------------------------------------------------------
+			
+s_arm: begin
+            countLoadN <= 1'b0; // Load countdown timer
+            if (startN) begin // Wait for startN to be released
+                SMbomb <= s_run;
+                countEnable <= 1'b1; // Start countdown
+            end else begin
+                SMbomb <= s_arm;
+            end
+        end
+        
+        s_run: begin
+            countEnable <= 1'b1; // Continue countdown
+            if (!waitN) begin
+                SMbomb <= s_pause;
+                countEnable <= 1'b0; // Pause countdown
+            end else if (timerEnd) begin
+                SMbomb <= s_lampOff; // Timer ended
+            end else begin
+                SMbomb <= s_run;
+            end
+        end
+        
+        s_pause: begin
+            countEnable <= 1'b0; // Countdown is paused
+            if (waitN) begin // Wait for waitN to be released
+                SMbomb <= s_run;
+                countEnable <= 1'b1; // Resume countdown
+            end else begin
+                SMbomb <= s_pause;
+            end
+        end
+        
+        s_lampOff: begin
+            lampEnable <= 1'b0; // Turn off lamp
+            if (OneSecPulse) begin // Blink display
+                SMbomb <= s_lampOn;
+            end else begin
+                SMbomb <= s_lampOff;
+            end
+        end
+        
+        s_lampOn: begin
+            lampEnable <= 1'b1; // Turn on lamp
+            if (OneSecPulse) begin // Continue blinking
+                SMbomb <= s_lampOff;
+            end else begin
+                SMbomb <= s_lampOn;
+            end
+        end
+        						
+
+
+//--------------------------------------------------------------------------------------------------------------------
+		
+
+//  		  =========		
+			  default : begin   
+//          =======			
+					SMbomb <= s_idle;  
+			 end // default
+						
+		endcase
+	end //else
+		
+	end // always sync
+	
+	//  outputs logic 
+	
+endmodule
+
